@@ -60,209 +60,215 @@ def _get_use_embeddings(use_model, sentences, batch_size=64):
 # -------------------------------------------------------------------------
 # USE Pipeline (now returns train_loader, test_loader)
 # -------------------------------------------------------------------------
+# ==========================================
+# Universal Sentence Encoder (USE) pipeline
+# ==========================================
 def prepare_use(cfg, test_size=0.2, random_state=42, stratify=True):
-    """
-    Loads CSV, splits into train/test BEFORE computing any features.
-    Fits label encoder and (optionally) TDA on train only, computes USE embeddings
-    for train and test, and returns train/test DataLoaders.
-    """
-    # Load and clean dataset
     df = pd.read_csv(cfg.CSV_PATH)
     df = df.dropna(subset=[cfg.TEXT_COLUMN, cfg.LABEL_COLUMN])
 
-    # Split into train/test
-    if stratify and not cfg.MULTILABEL:
-        strat = df[cfg.LABEL_COLUMN]
-    else:
-        strat = None
+    # Stratify if single-label
+    strat = df[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
 
-    df_train, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
+    # Split into train+val and test
+    df_trainval, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
 
-    # Encode labels using train only
-    y_train_tensor, y_test_tensor, num_classes, classes = _binarize_labels_train_test(
+    # Split trainval into train and val
+    strat_trainval = df_trainval[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
+    df_train, df_val = train_test_split(df_trainval, test_size=getattr(cfg, "VALIDATION_SPLIT", 0.1),
+                                        random_state=random_state, stratify=strat_trainval)
+
+    # Encode labels
+    y_train_tensor, y_val_tensor, num_classes, classes = _binarize_labels_train_test(
+        df_train[cfg.LABEL_COLUMN], df_val[cfg.LABEL_COLUMN], cfg.MULTILABEL
+    )
+    _, y_test_tensor, _, _ = _binarize_labels_train_test(
         df_train[cfg.LABEL_COLUMN], df_test[cfg.LABEL_COLUMN], cfg.MULTILABEL
     )
 
     texts_train = df_train[cfg.TEXT_COLUMN].astype(str).tolist()
+    texts_val = df_val[cfg.TEXT_COLUMN].astype(str).tolist()
     texts_test = df_test[cfg.TEXT_COLUMN].astype(str).tolist()
 
-    # Load USE model (same model used for both splits)
+    # Load USE model
     print("Loading Universal Sentence Encoder...")
     use_model = hub.load(cfg.MODEL_NAME)
 
-    # Compute USE embeddings for train and test (no fitting required)
-    print("Generating USE embeddings for train set...")
-    use_embeddings_train = _get_use_embeddings(use_model, texts_train, batch_size=64)
-    print("Generating USE embeddings for test set...")
-    use_embeddings_test = _get_use_embeddings(use_model, texts_test, batch_size=64)
+    # Compute embeddings
+    print("Generating USE embeddings...")
+    use_tensor_train = torch.tensor(_get_use_embeddings(use_model, texts_train), dtype=torch.float32)
+    use_tensor_val = torch.tensor(_get_use_embeddings(use_model, texts_val), dtype=torch.float32)
+    use_tensor_test = torch.tensor(_get_use_embeddings(use_model, texts_test), dtype=torch.float32)
 
-    use_tensor_train = torch.tensor(use_embeddings_train, dtype=torch.float32)
-    use_tensor_test = torch.tensor(use_embeddings_test, dtype=torch.float32)
-
-    # Optionally compute TDA features — fit only on train then transform test
     if cfg.TDA:
         print("Fitting TDA on training data...")
         tda_proc = TDAProcessor(fasttext_dim=cfg.FASTTEXT_DIM, pca_dim=cfg.PCA_DIM)
         tda_train = tda_proc.fit(texts_train)
-        print("Transforming TDA for test data...")
+        tda_val = tda_proc.transform(texts_val)
         tda_test = tda_proc.transform(texts_test)
 
-# Standardize TDA features (fit only on training)
         scaler = StandardScaler()
         tda_train = scaler.fit_transform(tda_train)
+        tda_val = scaler.transform(tda_val)
         tda_test = scaler.transform(tda_test)
 
-# Then convert to tensors
         tda_tensor_train = torch.tensor(tda_train, dtype=torch.float32)
+        tda_tensor_val = torch.tensor(tda_val, dtype=torch.float32)
         tda_tensor_test = torch.tensor(tda_test, dtype=torch.float32)
 
-
         train_dataset = TensorDataset(use_tensor_train, tda_tensor_train, y_train_tensor)
+        val_dataset = TensorDataset(use_tensor_val, tda_tensor_val, y_val_tensor)
         test_dataset = TensorDataset(use_tensor_test, tda_tensor_test, y_test_tensor)
         tda_dim = tda_tensor_train.shape[1]
     else:
         train_dataset = TensorDataset(use_tensor_train, y_train_tensor)
+        val_dataset = TensorDataset(use_tensor_val, y_val_tensor)
         test_dataset = TensorDataset(use_tensor_test, y_test_tensor)
         tda_dim = None
 
     train_loader = DataLoader(train_dataset, sampler=RandomSampler(train_dataset), batch_size=cfg.BATCH_SIZE)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.BATCH_SIZE)
     test_loader = DataLoader(test_dataset, batch_size=cfg.BATCH_SIZE)
 
-    return train_loader, test_loader, num_classes, tda_dim, classes
+    return train_loader, val_loader, test_loader, num_classes, tda_dim, classes
 
 
-# -------------------------------------------------------------------------
-# BERT Pipeline (train/test splitting before tokenization/TDA)
-# -------------------------------------------------------------------------
+# ==========================================
+# BERT pipeline
+# ==========================================
 def prepare_bert(cfg, test_size=0.2, random_state=42, stratify=True):
     df = pd.read_csv(cfg.CSV_PATH)
     df = df.dropna(subset=[cfg.TEXT_COLUMN, cfg.LABEL_COLUMN])
 
-    if stratify and not cfg.MULTILABEL:
-        strat = df[cfg.LABEL_COLUMN]
-    else:
-        strat = None
+    strat = df[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
+    df_trainval, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
+    strat_trainval = df_trainval[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
+    df_train, df_val = train_test_split(df_trainval, test_size=getattr(cfg, "VALIDATION_SPLIT", 0.1),
+                                        random_state=random_state, stratify=strat_trainval)
 
-    df_train, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
-
-    y_train_tensor, y_test_tensor, num_classes, classes = _binarize_labels_train_test(
-        df_train[cfg.LABEL_COLUMN], df_test[cfg.LABEL_COLUMN], cfg.MULTILABEL
+    y_train_tensor, y_val_tensor, num_classes, classes = _binarize_labels_train_test(
+        df_train[cfg.LABEL_COLUMN], df_val[cfg.LABEL_COLUMN], cfg.MULTILABEL
     )
+    _, y_test_tensor, _, _ = _binarize_labels_train_test(df_train[cfg.LABEL_COLUMN], df_test[cfg.LABEL_COLUMN], cfg.MULTILABEL)
 
     texts_train = df_train[cfg.TEXT_COLUMN].astype(str).tolist()
+    texts_val = df_val[cfg.TEXT_COLUMN].astype(str).tolist()
     texts_test = df_test[cfg.TEXT_COLUMN].astype(str).tolist()
 
-    # Tokenizer and model (tokenizer is stateless for encoding)
     tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     bert = AutoModel.from_pretrained(cfg.MODEL_NAME)
 
-    # Tokenize both train and test
-    tokens_train = tokenizer(
-        texts_train,
-        max_length=cfg.MAX_SEQ_LEN,
-        padding=True,
-        truncation=True,
-        return_token_type_ids=False,
-        return_tensors="pt"
-    )
-    tokens_test = tokenizer(
-        texts_test,
-        max_length=cfg.MAX_SEQ_LEN,
-        padding=True,
-        truncation=True,
-        return_token_type_ids=False,
-        return_tensors="pt"
-    )
+    def tokenize(texts):
+        return tokenizer(
+            texts,
+            max_length=cfg.MAX_SEQ_LEN,
+            padding=True,
+            truncation=True,
+            return_token_type_ids=False,
+            return_tensors="pt"
+        )
 
-    input_ids_train = tokens_train["input_ids"]
-    attention_mask_train = tokens_train["attention_mask"]
-    input_ids_test = tokens_test["input_ids"]
-    attention_mask_test = tokens_test["attention_mask"]
+    tokens_train = tokenize(texts_train)
+    tokens_val = tokenize(texts_val)
+    tokens_test = tokenize(texts_test)
 
-    # Optionally compute TDA features (fit on train only)
+    input_ids_train, attention_mask_train = tokens_train["input_ids"], tokens_train["attention_mask"]
+    input_ids_val, attention_mask_val = tokens_val["input_ids"], tokens_val["attention_mask"]
+    input_ids_test, attention_mask_test = tokens_test["input_ids"], tokens_test["attention_mask"]
+
     if cfg.TDA:
-        print("Fitting TDA on training data for BERT pipeline...")
+        print("Fitting TDA on training data...")
         tda_proc = TDAProcessor(fasttext_dim=cfg.FASTTEXT_DIM, pca_dim=cfg.PCA_DIM)
         tda_train = tda_proc.fit(texts_train)
+        tda_val = tda_proc.transform(texts_val)
         tda_test = tda_proc.transform(texts_test)
+
         tda_tensor_train = torch.tensor(tda_train, dtype=torch.float32)
+        tda_tensor_val = torch.tensor(tda_val, dtype=torch.float32)
         tda_tensor_test = torch.tensor(tda_test, dtype=torch.float32)
 
         train_dataset = TensorDataset(input_ids_train, attention_mask_train, tda_tensor_train, y_train_tensor)
+        val_dataset = TensorDataset(input_ids_val, attention_mask_val, tda_tensor_val, y_val_tensor)
         test_dataset = TensorDataset(input_ids_test, attention_mask_test, tda_tensor_test, y_test_tensor)
         tda_dim = tda_tensor_train.shape[1]
     else:
         train_dataset = TensorDataset(input_ids_train, attention_mask_train, y_train_tensor)
+        val_dataset = TensorDataset(input_ids_val, attention_mask_val, y_val_tensor)
         test_dataset = TensorDataset(input_ids_test, attention_mask_test, y_test_tensor)
         tda_dim = None
 
     train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.BATCH_SIZE)
     test_loader = DataLoader(test_dataset, batch_size=cfg.BATCH_SIZE)
 
-    return train_loader, test_loader, num_classes, tda_dim, classes, bert, tokenizer
+    return train_loader, val_loader, test_loader, num_classes, tda_dim, classes, bert, tokenizer
 
 
-# -------------------------------------------------------------------------
-# DPR Pipeline (same idea as BERT)
-# -------------------------------------------------------------------------
+# ==========================================
+# DPR pipeline
+# ==========================================
 def prepare_dpr(cfg, test_size=0.2, random_state=42, stratify=True):
     df = pd.read_csv(cfg.CSV_PATH)
     df = df.dropna(subset=[cfg.TEXT_COLUMN, cfg.LABEL_COLUMN])
 
-    if stratify and not cfg.MULTILABEL:
-        strat = df[cfg.LABEL_COLUMN]
-    else:
-        strat = None
+    strat = df[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
+    df_trainval, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
+    strat_trainval = df_trainval[cfg.LABEL_COLUMN] if stratify and not cfg.MULTILABEL else None
+    df_train, df_val = train_test_split(df_trainval, test_size=getattr(cfg, "VALIDATION_SPLIT", 0.1),
+                                        random_state=random_state, stratify=strat_trainval)
 
-    df_train, df_test = train_test_split(df, test_size=test_size, random_state=random_state, stratify=strat)
-
-    y_train_tensor, y_test_tensor, num_classes, classes = _binarize_labels_train_test(
-        df_train[cfg.LABEL_COLUMN], df_test[cfg.LABEL_COLUMN], cfg.MULTILABEL
+    y_train_tensor, y_val_tensor, num_classes, classes = _binarize_labels_train_test(
+        df_train[cfg.LABEL_COLUMN], df_val[cfg.LABEL_COLUMN], cfg.MULTILABEL
     )
+    _, y_test_tensor, _, _ = _binarize_labels_train_test(df_train[cfg.LABEL_COLUMN], df_test[cfg.LABEL_COLUMN], cfg.MULTILABEL)
 
     texts_train = df_train[cfg.TEXT_COLUMN].astype(str).tolist()
+    texts_val = df_val[cfg.TEXT_COLUMN].astype(str).tolist()
     texts_test = df_test[cfg.TEXT_COLUMN].astype(str).tolist()
 
     tokenizer = DPRContextEncoderTokenizer.from_pretrained(cfg.MODEL_NAME)
     dpr = DPRContextEncoder.from_pretrained(cfg.MODEL_NAME)
 
-    tokens_train = tokenizer(
-        texts_train,
-        max_length=cfg.MAX_SEQ_LEN,
-        padding=True,
-        truncation=True,
-        return_tensors="pt"
-    )
-    tokens_test = tokenizer(
-        texts_test,
-        max_length=cfg.MAX_SEQ_LEN,
-        padding=True,
-        truncation=True,
-        return_tensors="pt"
-    )
+    def tokenize(texts):
+        return tokenizer(
+            texts,
+            max_length=cfg.MAX_SEQ_LEN,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        )
 
-    input_ids_train = tokens_train["input_ids"]
-    attention_mask_train = tokens_train["attention_mask"]
-    input_ids_test = tokens_test["input_ids"]
-    attention_mask_test = tokens_test["attention_mask"]
+    tokens_train = tokenize(texts_train)
+    tokens_val = tokenize(texts_val)
+    tokens_test = tokenize(texts_test)
+
+    input_ids_train, attention_mask_train = tokens_train["input_ids"], tokens_train["attention_mask"]
+    input_ids_val, attention_mask_val = tokens_val["input_ids"], tokens_val["attention_mask"]
+    input_ids_test, attention_mask_test = tokens_test["input_ids"], tokens_test["attention_mask"]
 
     if cfg.TDA:
-        print("Fitting TDA on training data for DPR pipeline...")
+        print("Fitting TDA on training data...")
         tda_proc = TDAProcessor(fasttext_dim=cfg.FASTTEXT_DIM, pca_dim=cfg.PCA_DIM)
         tda_train = tda_proc.fit(texts_train)
+        tda_val = tda_proc.transform(texts_val)
         tda_test = tda_proc.transform(texts_test)
+
         tda_tensor_train = torch.tensor(tda_train, dtype=torch.float32)
+        tda_tensor_val = torch.tensor(tda_val, dtype=torch.float32)
         tda_tensor_test = torch.tensor(tda_test, dtype=torch.float32)
 
         train_dataset = TensorDataset(input_ids_train, attention_mask_train, tda_tensor_train, y_train_tensor)
+        val_dataset = TensorDataset(input_ids_val, attention_mask_val, tda_tensor_val, y_val_tensor)
         test_dataset = TensorDataset(input_ids_test, attention_mask_test, tda_tensor_test, y_test_tensor)
         tda_dim = tda_tensor_train.shape[1]
     else:
         train_dataset = TensorDataset(input_ids_train, attention_mask_train, y_train_tensor)
+        val_dataset = TensorDataset(input_ids_val, attention_mask_val, y_val_tensor)
         test_dataset = TensorDataset(input_ids_test, attention_mask_test, y_test_tensor)
         tda_dim = None
 
     train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.BATCH_SIZE)
     test_loader = DataLoader(test_dataset, batch_size=cfg.BATCH_SIZE)
 
-    return train_loader, test_loader, num_classes, tda_dim, classes, dpr, tokenizer
+    return train_loader, val_loader, test_loader, num_classes, tda_dim, classes, dpr, tokenizer

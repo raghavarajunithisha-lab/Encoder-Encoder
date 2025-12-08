@@ -20,6 +20,8 @@ BATCH_SIZE = 16
 EPOCHS = 5
 LEARNING_RATE = 1e-3
 
+VALIDATION_SPLIT = 0.1
+
 # Feature toggles
 TDA = True       # whether to compute additional TDA features
 MULTILABEL = False  # False because label is single-class here

@@ -5,7 +5,6 @@ Switch pipelines by editing the import here to the desired config module.
 This version adds early stopping inside train_loop while preserving the
 original signatures and evaluation logic.
 """
-import copy
 import torch
 import torch.nn as nn
 import numpy as np
@@ -75,57 +74,61 @@ def _tuple_to_metrics(result_tuple, multilabel):
 def evaluate(model, data_loader, loss_fn, device, multilabel, tda):
     model.eval()
     total_loss = 0
-    all_preds, all_labels = [], []
+    all_probs, all_preds, all_labels = [], [], []
+
     for batch in data_loader:
-      batch = [b.to(device) for b in batch]
+        batch = [b.to(device) for b in batch]
 
-    # --- Handle TDA vs non-TDA input formats ---
-      if tda:
-        if len(batch) == 4:
-            sent_id, mask, tda_feats, labels_b = batch
-            outputs = model(sent_id, mask, tda_feats)
-        elif len(batch) == 3:
-            inputs, tda_feats, labels_b = batch
-            outputs = model(inputs, tda_feats)
+        # --- Handle TDA vs non-TDA input formats ---
+        if tda:
+            if len(batch) == 4:
+                sent_id, mask, tda_feats, labels_b = batch
+                outputs = model(sent_id, mask, tda_feats)
+            elif len(batch) == 3:
+                inputs, tda_feats, labels_b = batch
+                outputs = model(inputs, tda_feats)
+            else:
+                raise ValueError(f"Unexpected batch format (TDA): {len(batch)} elements")
         else:
-            raise ValueError(f"Unexpected batch format (TDA): {len(batch)} elements")
-      else:
-        if len(batch) == 3:
-            sent_id, mask, labels_b = batch
-            outputs = model(sent_id, mask)
-        elif len(batch) == 2:
-            inputs, labels_b = batch
-            outputs = model(inputs)
+            if len(batch) == 3:
+                sent_id, mask, labels_b = batch
+                outputs = model(sent_id, mask)
+            elif len(batch) == 2:
+                inputs, labels_b = batch
+                outputs = model(inputs)
+            else:
+                raise ValueError(f"Unexpected batch format (no TDA): {len(batch)} elements")
+
+        # --- Loss computation ---
+        loss = loss_fn(outputs, labels_b)
+        total_loss += loss.item()
+
+        if multilabel:
+            # --- Keep probabilities for metrics that need them (like AUC) ---
+            probs = torch.sigmoid(outputs)
+            preds = (probs > 0.5).float()  # binary predictions for F1, precision, recall
+            all_probs.append(probs.detach().cpu())
+            all_preds.append(preds.detach().cpu())
         else:
-            raise ValueError(f"Unexpected batch format (no TDA): {len(batch)} elements")
+            preds = torch.argmax(outputs, dim=1)
+            all_preds.append(preds.detach().cpu())
 
-    # --- Loss computation ---
-      loss = loss_fn(outputs, labels_b)
-      total_loss += loss.item()
+        all_labels.append(labels_b.detach().cpu())
 
-    # --- Prediction handling ---
-      if multilabel:
-        # Convert logits → probabilities → binary predictions
-        probs = torch.sigmoid(outputs)
-        preds = (probs > 0.5).float()
-      else:
-        preds = torch.argmax(outputs, dim=1)
-
-      all_preds.append(preds.detach().cpu())
-      all_labels.append(labels_b.detach().cpu())
-
-# --- Aggregate and compute metrics ---
-    all_preds = torch.cat(all_preds)
+    # --- Aggregate results ---
     all_labels = torch.cat(all_labels)
+    all_preds = torch.cat(all_preds)
+
     avg_loss = total_loss / len(data_loader)
 
     if multilabel:
-    # Convert tensors to numpy for sklearn metrics
-       metrics_dict = multilabel_metrics(all_labels.numpy(), all_preds.numpy())
-       return {"loss": avg_loss, **metrics_dict}
+        all_probs = torch.cat(all_probs)
+        metrics_dict = multilabel_metrics(all_labels.numpy(), all_preds.numpy(), all_probs.numpy())
+        return {"loss": avg_loss, **metrics_dict}
     else:
-       acc = (all_preds == all_labels).float().mean().item()
-       return {"loss": avg_loss, "acc": acc}
+        acc = (all_preds == all_labels).float().mean().item()
+        return {"loss": avg_loss, "acc": acc}
+
 # ====================================================
 # EarlyStopping helper (inline)
 # ====================================================
@@ -166,11 +169,11 @@ class EarlyStopping:
 # ====================================================
 # Training Loop (modified to support early stopping)
 # ====================================================
-def train_loop(model, train_loader, test_loader, cfg, device, train_epoch, multilabel=False, tda=False):
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=1e-4)
+def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_epoch, multilabel=False, tda=False):
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
 
-    # build loss function (same logic)
+    # build loss function
     if multilabel:
         loss_fn = nn.BCEWithLogitsLoss()
     else:
@@ -180,7 +183,7 @@ def train_loop(model, train_loader, test_loader, cfg, device, train_epoch, multi
             labels_all = np.concatenate([b[-1].cpu().numpy() for b in train_loader], axis=0)
         loss_fn = _get_loss_fn(multilabel, labels_all, device=device)
 
-    # Early stopping configuration (use cfg if available; provide safe defaults)
+    # Early stopping configuration
     use_early = getattr(cfg, "EARLY_STOPPING", False)
     patience = getattr(cfg, "PATIENCE", 3)
     delta = getattr(cfg, "DELTA", 0.0)
@@ -188,11 +191,11 @@ def train_loop(model, train_loader, test_loader, cfg, device, train_epoch, multi
     early_stopper = EarlyStopping(patience=patience, delta=delta, verbose=True) if use_early else None
 
     for epoch in range(cfg.EPOCHS):
-        # run one training epoch using provided train_epoch function
+        # run one training epoch
         result = train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel, tda)
         train_metrics = _tuple_to_metrics(result, multilabel)
 
-        # scheduler step (keep existing behavior)
+        # scheduler step
         scheduler.step()
 
         print(f"\nEpoch {epoch + 1}/{cfg.EPOCHS}")
@@ -208,40 +211,39 @@ def train_loop(model, train_loader, test_loader, cfg, device, train_epoch, multi
         else:
             print(f"Train | Loss: {train_metrics['loss']:.4f} | Acc: {train_metrics['acc']:.4f}")
 
-        # Evaluate on validation/test set after each epoch
-        test_metrics = evaluate(model, test_loader, loss_fn, device, multilabel, tda)
+        # Evaluate on validation set
+        val_metrics = evaluate(model, val_loader, loss_fn, device, multilabel, tda)
 
         if multilabel:
             print(
-                f"Val | Loss: {test_metrics['loss']:.4f} | "
-                f"F1-micro: {test_metrics['f1_micro']:.4f} | "
-                f"F1-macro: {test_metrics['f1_macro']:.4f} | "
-                f"Precision: {test_metrics['precision']:.4f} | "
-                f"Recall: {test_metrics['recall']:.4f} | "
-                f"AUC: {test_metrics['auc']:.4f}"
+                f"Val   | Loss: {val_metrics['loss']:.4f} | "
+                f"F1-micro: {val_metrics['f1_micro']:.4f} | "
+                f"F1-macro: {val_metrics['f1_macro']:.4f} | "
+                f"Precision: {val_metrics['precision']:.4f} | "
+                f"Recall: {val_metrics['recall']:.4f} | "
+                f"AUC: {val_metrics['auc']:.4f}"
             )
         else:
-            print(f"Val | Loss: {test_metrics['loss']:.4f} | Acc: {test_metrics['acc']:.4f}")
+            print(f"Val   | Loss: {val_metrics['loss']:.4f} | Acc: {val_metrics['acc']:.4f}")
 
         # Early stopping check
         if early_stopper is not None:
-            val_loss = float(test_metrics["loss"])
+            val_loss = float(val_metrics["loss"])
             early_stopper.step(val_loss, model)
             if early_stopper.early_stop:
-                # restore best state into the model
                 if early_stopper.best_state is not None:
                     model.load_state_dict(early_stopper.best_state)
                     print("Restored model to best validation state.")
                 print(f"Stopping training after epoch {epoch + 1} due to early stopping.")
                 break
 
-    # Final evaluation (after training loop completes or early stop)
+    # Final evaluation on test set
     print("\nEvaluating on test set...")
     test_metrics = evaluate(model, test_loader, loss_fn, device, multilabel, tda)
 
     if multilabel:
         print(
-            f"Test | Loss: {test_metrics['loss']:.4f} | "
+            f"Test  | Loss: {test_metrics['loss']:.4f} | "
             f"F1-micro: {test_metrics['f1_micro']:.4f} | "
             f"F1-macro: {test_metrics['f1_macro']:.4f} | "
             f"Precision: {test_metrics['precision']:.4f} | "
@@ -249,33 +251,29 @@ def train_loop(model, train_loader, test_loader, cfg, device, train_epoch, multi
             f"AUC: {test_metrics['auc']:.4f}"
         )
     else:
-        print(f"Test | Loss: {test_metrics['loss']:.4f} | Acc: {test_metrics['acc']:.4f}")
+        print(f"Test  | Loss: {test_metrics['loss']:.4f} | Acc: {test_metrics['acc']:.4f}")
+
 
 # ====================================================
 # Pipeline Selection (TDA conditional handled here)
 # ====================================================
 if cfg.MODEL_TYPE == "USE":
-    train_loader, test_loader, num_classes, tda_dim, classes = prepare_use(cfg)
-    if cfg.TDA:
-        model = USE_Model(cfg.USE_DIM, num_classes, cfg.MULTILABEL, tda_dim).to(device)
-    else:
-        model = USE_Model(cfg.USE_DIM, num_classes, cfg.MULTILABEL, None).to(device)
-
-    train_loop(model, train_loader, test_loader, cfg, device, train_epoch_use, cfg.MULTILABEL, cfg.TDA)
+    train_loader, val_loader, test_loader, num_classes, tda_dim, classes = prepare_use(cfg)
+    model = USE_Model(cfg.USE_DIM, num_classes, cfg.MULTILABEL, tda_dim if cfg.TDA else None).to(device)
+    train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_epoch_use, cfg.MULTILABEL, cfg.TDA)
 
 elif cfg.MODEL_TYPE == "BERT":
-    train_loader, test_loader, num_classes, tda_dim, classes, bert, tokenizer = prepare_bert(cfg)
+    train_loader, val_loader, test_loader, num_classes, tda_dim, classes, bert, tokenizer = prepare_bert(cfg)
     model = BERT_Arch(bert, num_classes, tda_dim if cfg.TDA else None, cfg.TDA, cfg.MULTILABEL).to(device)
-    for param in model.bert.parameters():
-        param.requires_grad = False
-    train_loop(model, train_loader, test_loader, cfg, device, train_epoch_bert, cfg.MULTILABEL, cfg.TDA)
+    for param in model.bert.parameters(): param.requires_grad = False
+    train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_epoch_bert, cfg.MULTILABEL, cfg.TDA)
 
 elif cfg.MODEL_TYPE == "DPR":
-    train_loader, test_loader, num_classes, tda_dim, classes, dpr, tokenizer = prepare_dpr(cfg)
+    train_loader, val_loader, test_loader, num_classes, tda_dim, classes, dpr, tokenizer = prepare_dpr(cfg)
     model = DPR_Arch(dpr, num_classes, tda_dim if cfg.TDA else None, cfg.TDA, cfg.MULTILABEL).to(device)
-    for param in model.dpr.parameters():
-        param.requires_grad = False
-    train_loop(model, train_loader, test_loader, cfg, device, train_epoch_dpr, cfg.MULTILABEL, cfg.TDA)
+    for param in model.dpr.parameters(): param.requires_grad = False
+    train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_epoch_dpr, cfg.MULTILABEL, cfg.TDA)
+
 
 else:
     raise ValueError(f"Unsupported MODEL_TYPE {cfg.MODEL_TYPE}")

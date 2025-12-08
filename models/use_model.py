@@ -2,73 +2,67 @@ import torch
 import torch.nn as nn
 
 class USE_Model(nn.Module):
+    """
+    Unified USE model supporting optional TDA features.
+    Architecture is consistent whether TDA is used or not,
+    allowing fair comparison between USE-only and USE+TDA.
+    Dropout is applied the same number of times in all cases.
+    """
 
-  def __init__(self, use_dim, num_classes, multilabel=False, tda_dim=None):
-    super().__init__()
-    self.tda_dim = tda_dim
-    self.multilabel = multilabel
-    self.relu = nn.ReLU()
+    def __init__(self, use_dim, num_classes, multilabel=False, tda_dim=None):
+        super().__init__()
+        self.tda_dim = tda_dim
+        self.multilabel = multilabel
+        self.relu = nn.ReLU()
 
-    if tda_dim is None:
-        # Simple classifier for USE-only
-        self.fc = nn.Sequential(
-            nn.Linear(use_dim, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, num_classes),
-        )
-    else:
-        # Projections for USE and TDA features
+        # ----- Projection of USE features -----
         self.use_proj = nn.Sequential(
             nn.Linear(use_dim, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.3),  # first dropout
         )
 
-        self.tda_proj = nn.Sequential(
-            nn.Linear(tda_dim, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-        )
+        # ----- Optional TDA projection -----
+        if tda_dim is not None:
+            self.tda_proj = nn.Sequential(
+                nn.Linear(tda_dim, 128),
+                nn.LayerNorm(128),
+                nn.ReLU(),
+            )
+            # Feature-wise gating for fusion
+            self.gate = nn.Sequential(
+                nn.Linear(128 * 2, 128),
+                nn.Sigmoid(),
+            )
 
-        # Learnable feature-wise gating: α ∈ [0,1]^128
-        self.gate = nn.Sequential(
-            nn.Linear(128 * 2, 128),
-            nn.Sigmoid(),
-        )
-
-        # Fusion classifier
+        # ----- Final classifier (same for both USE-only and USE+TDA) -----
         self.fc = nn.Sequential(
             nn.Linear(256, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.5),  # second dropout
             nn.Linear(128, num_classes),
         )
 
-    if not multilabel:
-        self.softmax = nn.LogSoftmax(dim=1)
+    def forward(self, use_feats, tda_feats=None):
+        # Project USE features
+        use_out = self.use_proj(use_feats)
 
-  def forward(self, use_feats, tda_feats=None):
-    if self.tda_dim is None:
-        x = self.fc(use_feats)
-        return x if self.multilabel else self.softmax(x)
+        if self.tda_dim is not None and tda_feats is not None:
+            # Project TDA features
+            tda_out = self.tda_proj(tda_feats)
 
-    # Project USE and TDA features
-    use_out = self.use_proj(use_feats)
-    tda_out = self.tda_proj(tda_feats)
+            # Feature-wise gating fusion
+            gate_input = torch.cat([use_out, tda_out], dim=1)
+            alpha = self.gate(gate_input)  # [batch, 128]
+            fusion = alpha * use_out + (1 - alpha) * tda_out
+        else:
+            # No TDA → use USE features as fusion
+            fusion = use_out
 
-    # Learn adaptive fusion per feature
-    gate_input = torch.cat([use_out, tda_out], dim=1)
-    alpha = self.gate(gate_input)  # shape [batch, 128]
-    fusion = alpha * use_out + (1 - alpha) * tda_out
+        # Concatenate USE projection + fusion vector (always 256-D)
+        x = torch.cat([use_out, fusion], dim=1)
+        logits = self.fc(x)
 
-    # Combine and classify
-    x = torch.cat((use_out, fusion), dim=1)
-    x = self.fc(x)
-    return x if self.multilabel else self.softmax(x)
+        return logits  # raw logits
