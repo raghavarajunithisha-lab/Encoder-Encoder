@@ -21,7 +21,7 @@ from nltk.tokenize import word_tokenize
 from scipy.spatial.distance import pdist
 
 # Ensure NLTK tokenizer is available
-nltk.download("punkt", quiet=True)
+nltk.download("punkt_tab", quiet=True)
 
 
 def sentence_diagram(sentence, model, vector_size=100, quantile=0.9):
