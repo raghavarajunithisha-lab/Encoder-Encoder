@@ -36,7 +36,7 @@ def run_experiment():
         for ds in DATASETS:
             for use_tda in TDA_OPTIONS:
                 print("\n" + "="*60)
-                print(f"RUNNING: Model={model_type} | Dataset={ds['name']} | TDA={use_tda}")
+                print(f"RUNNING: Model={model_type} | Dataset={ds['name']} | TDA={use_tda} | MULTILABEL={ds['multilabel']}")
                 print("="*60)
 
                 # 1. Create a fresh config object for this specific run
