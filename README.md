@@ -16,4 +16,4 @@ After choosing the model, update the corresponding configuration file in the con
 
 Finally, run the main script from the terminal:
 
-python main.py
+python run.py
