@@ -17,7 +17,7 @@ LABEL_COLUMN = "Suicide" # column containing the target labels
 # ---------------------------------------------------
 
 BATCH_SIZE = 16
-EPOCHS = 5
+EPOCHS = 100
 LEARNING_RATE = 1e-3
 
 VALIDATION_SPLIT = 0.1
