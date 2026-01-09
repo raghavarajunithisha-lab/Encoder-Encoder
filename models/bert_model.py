@@ -59,7 +59,7 @@ class BERT_Arch(nn.Module):
             alpha = self.gate(gate_input)
             fusion = alpha * bert_out + (1 - alpha) * tda_out
         else:
-            fusion = bert_out
+            fusion = torch.zeros_like(bert_out)
 
         x = torch.cat([bert_out, fusion], dim=1)
         logits = self.fc(x)

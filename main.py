@@ -127,44 +127,51 @@ def evaluate(model, data_loader, loss_fn, device, multilabel, tda):
 # ====================================================
 class EarlyStopping:
     """
-    Simple early-stopping helper.
-    Tracks best validation loss and stops when no improvement for `patience` epochs.
-    Restores best model state (in-memory) when stopping.
+    Early-stopping helper that supports both minimizing (loss) and 
+    maximizing (F1/Accuracy) metrics.
     """
-    def __init__(self, patience=3, delta=0.0, verbose=True):
+    def __init__(self, patience=3, delta=0.0, verbose=True, mode='min'):
         self.patience = int(patience)
         self.delta = float(delta)
         self.verbose = bool(verbose)
+        self.mode = mode  # 'min' for loss, 'max' for F1/Acc
 
-        self.best_loss = float("inf")
-        self.best_state = None
         self.counter = 0
         self.early_stop = False
+        self.best_state = None
+        
+        # Initialize best score based on mode
+        self.best_score = float("inf") if mode == 'min' else float("-inf")
 
-    def step(self, val_loss, model):
-        improved = val_loss < (self.best_loss - self.delta)
+    def step(self, current_score, model):
+        # Determine if current score is better than best score
+        if self.mode == 'min':
+            improved = current_score < (self.best_score - self.delta)
+        else:
+            improved = current_score > (self.best_score + self.delta)
+
         if improved:
-            self.best_loss = val_loss
-            # store cpu copy of state_dict to avoid GPU-only referencing issues
+            self.best_score = current_score
             self.best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             self.counter = 0
             if self.verbose:
-                print(f"Validation loss improved to {val_loss:.4f} — saving best state.")
+                print(f"Validation {self.mode} score improved to {current_score:.4f} — saving best state.")
         else:
             self.counter += 1
             if self.verbose:
-                print(f"No improvement in validation loss ({self.counter}/{self.patience}).")
+                print(f"No improvement ({self.counter}/{self.patience}).")
             if self.counter >= self.patience:
                 self.early_stop = True
                 if self.verbose:
-                    print("Early stopping criterion met.")
+                    print(f"Stopping training: patience of {self.patience} reached.")
 
 # ====================================================
 # Training Loop (modified to support early stopping)
 # ====================================================
 def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_epoch, multilabel=False, tda=False):
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
+    
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
     # build loss function
     if multilabel:
@@ -181,14 +188,22 @@ def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_
     patience = getattr(cfg, "PATIENCE", 3)
     delta = getattr(cfg, "DELTA", 0.0)
 
-    early_stopper = EarlyStopping(patience=patience, delta=delta, verbose=True) if use_early else None
+    # This handles imbalanced data better.
+    stop_metric = "f1_macro" if multilabel else "acc"
+    
+    early_stopper = EarlyStopping(
+        patience=patience, 
+        delta=delta, 
+        verbose=True, 
+        mode='max'  # We want to MAXIMIZE the score
+    ) if use_early else None
 
     for epoch in range(cfg.EPOCHS):
         # run one training epoch
         result = train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel, tda)
         train_metrics = _tuple_to_metrics(result, multilabel)
 
-        # scheduler step
+        # scheduler step (applies every 3 epochs)
         scheduler.step()
 
         print(f"\nEpoch {epoch + 1}/{cfg.EPOCHS}")
@@ -219,14 +234,18 @@ def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_
         else:
             print(f"Val   | Loss: {val_metrics['loss']:.4f} | Acc: {val_metrics['acc']:.4f}")
 
-        # Early stopping check
+        # Early stopping check using the chosen classification metric
         if early_stopper is not None:
-            val_loss = float(val_metrics["loss"])
-            early_stopper.step(val_loss, model)
+            current_score = float(val_metrics[stop_metric])
+            
+            # Note: Ensure your EarlyStopping class has a .step() method 
+            # or change this to early_stopper(current_score, model) if using __call__
+            early_stopper.step(current_score, model) 
+            
             if early_stopper.early_stop:
                 if early_stopper.best_state is not None:
                     model.load_state_dict(early_stopper.best_state)
-                    print("Restored model to best validation state.")
+                    print(f"Restored model to best validation {stop_metric} state.")
                 print(f"Stopping training after epoch {epoch + 1} due to early stopping.")
                 break
 
@@ -245,5 +264,3 @@ def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_
         )
     else:
         print(f"Test  | Loss: {test_metrics['loss']:.4f} | Acc: {test_metrics['acc']:.4f}")
-
-

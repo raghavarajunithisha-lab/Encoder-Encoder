@@ -55,7 +55,7 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         else:
             # Otherwise, only (sent_id, attention_mask, labels)
             sent_id, mask, labels_b = batch
-            logits = model(sent_id, mask, None)  # Explicit None for TDA input
+            logits = model(sent_id, mask)  
 
         # ----------------------------------------------------------
         # Convert labels to float for multi-label classification
@@ -63,6 +63,8 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         # ----------------------------------------------------------
         if multilabel:
             labels_b = labels_b.float()
+        else:
+            labels_b = labels_b.long()
 
         # ----------------------------------------------------------
         # Compute batch loss

@@ -58,8 +58,7 @@ class USE_Model(nn.Module):
             alpha = self.gate(gate_input)  # [batch, 128]
             fusion = alpha * use_out + (1 - alpha) * tda_out
         else:
-            # No TDA → use USE features as fusion
-            fusion = use_out
+            fusion = torch.zeros_like(use_out)
 
         # Concatenate USE projection + fusion vector (always 256-D)
         x = torch.cat([use_out, fusion], dim=1)

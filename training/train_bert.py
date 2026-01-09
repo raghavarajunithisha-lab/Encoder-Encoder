@@ -56,6 +56,8 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         # For multi-label classification, labels must be float tensors
         if multilabel:
             labels_b = labels_b.float()
+        else:
+            labels_b = labels_b.long()
 
         # Compute loss for this batch
         loss = loss_fn(logits, labels_b)

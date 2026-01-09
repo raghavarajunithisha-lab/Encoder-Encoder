@@ -61,7 +61,7 @@ class DPR_Arch(nn.Module):
             alpha = self.gate(gate_input)
             fusion = alpha * dpr_out + (1 - alpha) * tda_out
         else:
-            fusion = dpr_out
+            fusion = torch.zeros_like(dpr_out)
 
         x = torch.cat([dpr_out, fusion], dim=1)
         logits = self.fc(x)

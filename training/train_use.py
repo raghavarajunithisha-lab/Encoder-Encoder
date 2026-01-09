@@ -62,6 +62,8 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         # ----------------------------------------------------------
         if multilabel:
             labels_b = labels_b.float()
+        else:
+            labels_b = labels_b.long()
 
         # ----------------------------------------------------------
         # Compute batch loss
