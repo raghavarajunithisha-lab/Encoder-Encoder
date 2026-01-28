@@ -16,6 +16,11 @@ from main import train_loop
 # Import your base configs to use as templates
 from configs import config_bert, config_dpr, config_use
 
+from training.train_use import train_epoch as train_epoch_use
+from training.train_bert import train_epoch as train_epoch_bert
+from training.train_dpr import train_epoch as train_epoch_dpr
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Define the experiment matrix
