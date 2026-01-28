@@ -48,15 +48,11 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         # Forward pass through the model
         # ----------------------------------------------------------
         if TDA:
-            # If using TDA fusion, batch includes:
-            # (sent_id, attention_mask, tda_features, labels)
-            sent_id, mask, tda_feats, labels_b = batch
-            logits = model(sent_id, mask, tda_feats)
+           embeddings, tda_feats, labels_b = batch
+           logits = model(embeddings, tda_feats)
         else:
-            # Otherwise, only (sent_id, attention_mask, labels)
-            sent_id, mask, labels_b = batch
-            logits = model(sent_id, mask)  
-
+            embeddings, labels_b = batch
+            logits = model(embeddings)
         # ----------------------------------------------------------
         # Convert labels to float for multi-label classification
         # (required for BCEWithLogitsLoss)

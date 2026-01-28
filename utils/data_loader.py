@@ -174,8 +174,8 @@ def prepare_bert(cfg, test_size=0.2, random_state=42, stratify=True):
         batch_size = cfg.BATCH_SIZE
         with torch.no_grad():
             for i in range(0, ids.size(0), batch_size):
-                b_ids = ids[i:i+batch_size].to(device)
-                b_mask = mask[i:i+batch_size].to(device)
+                b_ids = ids[i:i+batch_size]
+                b_mask = mask[i:i+batch_size]
                 out = bert(b_ids, attention_mask=b_mask)
                 # Take [CLS] token: shape (batch, hidden_size)
                 embeddings.append(out.last_hidden_state[:, 0, :].cpu().numpy())
@@ -209,27 +209,6 @@ def prepare_bert(cfg, test_size=0.2, random_state=42, stratify=True):
         val_dataset = TensorDataset(emb_val, y_val_tensor)
         test_dataset = TensorDataset(emb_test, y_test_tensor)
         tda_dim = None
-
-    # if cfg.TDA:
-    #     print("Fitting TDA on training data...")
-    #     tda_proc = TDAProcessor(fasttext_dim=cfg.FASTTEXT_DIM, pca_dim=cfg.PCA_DIM)
-    #     tda_train = tda_proc.fit(texts_train)
-    #     tda_val = tda_proc.transform(texts_val)
-    #     tda_test = tda_proc.transform(texts_test)
-
-    #     tda_tensor_train = torch.tensor(tda_train, dtype=torch.float32)
-    #     tda_tensor_val = torch.tensor(tda_val, dtype=torch.float32)
-    #     tda_tensor_test = torch.tensor(tda_test, dtype=torch.float32)
-
-    #     train_dataset = TensorDataset(input_ids_train, attention_mask_train, tda_tensor_train, y_train_tensor)
-    #     val_dataset = TensorDataset(input_ids_val, attention_mask_val, tda_tensor_val, y_val_tensor)
-    #     test_dataset = TensorDataset(input_ids_test, attention_mask_test, tda_tensor_test, y_test_tensor)
-    #     tda_dim = tda_tensor_train.shape[1]
-    # else:
-    #     train_dataset = TensorDataset(input_ids_train, attention_mask_train, y_train_tensor)
-    #     val_dataset = TensorDataset(input_ids_val, attention_mask_val, y_val_tensor)
-    #     test_dataset = TensorDataset(input_ids_test, attention_mask_test, y_test_tensor)
-    #     tda_dim = None
 
     train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=cfg.BATCH_SIZE)
@@ -287,8 +266,8 @@ def prepare_dpr(cfg, test_size=0.2, random_state=42, stratify=True):
         batch_size = cfg.BATCH_SIZE
         with torch.no_grad():
             for i in range(0, ids.size(0), batch_size):
-                b_ids = ids[i:i+batch_size].to(device)
-                b_mask = mask[i:i+batch_size].to(device)
+                b_ids = ids[i:i+batch_size]
+                b_mask = mask[i:i+batch_size]
                 # DPRContextEncoder returns pooler_output by default
                 out = dpr(b_ids, attention_mask=b_mask)
                 embeddings.append(out.pooler_output.cpu().numpy())

@@ -11,7 +11,7 @@ from utils.data_loader import prepare_use, prepare_bert, prepare_dpr
 
 # Import the training logic from your main.py
 # (Ensure main.py is importable by wrapping its execution code in if __name__ == "__main__")
-from main import train_loop, train_epoch_use, train_epoch_bert, train_epoch_dpr
+from main import train_loop
 
 # Import your base configs to use as templates
 from configs import config_bert, config_dpr, config_use
@@ -70,7 +70,7 @@ def run_experiment():
                 cfg.TDA = use_tda
                 
                 # Keep epochs consistent for the benchmark
-                cfg.EPOCHS = 5 
+                cfg.EPOCHS = 100
                 # Ensure Early Stopping settings exist
                 if not hasattr(cfg, 'EARLY_STOPPING'): cfg.EARLY_STOPPING = True
                 if not hasattr(cfg, 'PATIENCE'): cfg.PATIENCE = 3

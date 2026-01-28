@@ -45,14 +45,11 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         # Forward pass
         # -------------------------------------------------------------
         if TDA:
-            # If using TDA features, unpack 4-tuple (sent_id, mask, tda_feats, labels)
-            sent_id, mask, tda_feats, labels_b = batch
-            logits = model(sent_id, mask, tda_feats)
+            embeddings, tda_feats, labels_b = batch
+            logits = model(embeddings, tda_feats)
         else:
-            # Otherwise, unpack 3-tuple (sent_id, mask, labels)
-            sent_id, mask, labels_b = batch
-            logits = model(sent_id, mask)
-
+            embeddings, labels_b = batch
+            logits = model(embeddings)
         # For multi-label classification, labels must be float tensors
         if multilabel:
             labels_b = labels_b.float()

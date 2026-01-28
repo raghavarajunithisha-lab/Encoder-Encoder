@@ -13,15 +13,6 @@ from sklearn.utils.class_weight import compute_class_weight
 # Data & utils
 from utils.metrics import multilabel_metrics
 
-# Model imports
-from models.use_model import USE_Model
-from models.bert_model import BERT_Arch
-from models.dpr_model import DPR_Arch
-
-# Training functions
-from training.train_use import train_epoch as train_epoch_use
-from training.train_bert import train_epoch as train_epoch_bert
-from training.train_dpr import train_epoch as train_epoch_dpr
 
 # ====================================================
 # Setup

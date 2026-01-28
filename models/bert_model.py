@@ -47,11 +47,15 @@ class BERT_Arch(nn.Module):
             nn.Linear(128, num_classes),
         )
 
-    def forward(self, sent_id, mask, tda_feats=None):
-        # Project BERT [CLS] embedding
-        bert_outs = self.bert(sent_id, attention_mask=mask)
-        cls_hs = bert_outs.last_hidden_state[:, 0]  # [batch, hidden_size]
-        bert_out = self.bert_proj(cls_hs)
+    def forward(self, bert_embeddings, tda_feats=None):
+        """
+        bert_embeddings: Tensor of shape [batch_size, hidden_size]
+                         (precomputed CLS embeddings)
+        tda_feats: Optional TDA feature tensor
+        """
+
+        # Project BERT embeddings
+        bert_out = self.bert_proj(bert_embeddings)
 
         if self.use_tda and tda_feats is not None:
             tda_out = self.tda_proj(tda_feats)
@@ -63,4 +67,5 @@ class BERT_Arch(nn.Module):
 
         x = torch.cat([bert_out, fusion], dim=1)
         logits = self.fc(x)
-        return logits  # raw logits
+        return logits
+

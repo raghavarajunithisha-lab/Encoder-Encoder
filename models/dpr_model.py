@@ -47,13 +47,15 @@ class DPR_Arch(nn.Module):
             nn.Linear(128, num_classes),
         )
 
-    def forward(self, sent_id, mask, tda_feats=None):
-        dpr_outs = self.dpr(input_ids=sent_id, attention_mask=mask)
-        cls_hs = getattr(dpr_outs, "pooler_output", None)
-        if cls_hs is None:
-            cls_hs = dpr_outs.last_hidden_state[:, 0]
+    def forward(self, dpr_embeddings, tda_feats=None):
+        """
+        dpr_embeddings: Tensor of shape [batch_size, hidden_size]
+                        (precomputed DPR embeddings)
+        tda_feats: Optional TDA feature tensor
+        """
 
-        dpr_out = self.dpr_proj(cls_hs)
+        # Project DPR embeddings
+        dpr_out = self.dpr_proj(dpr_embeddings)
 
         if self.use_tda and tda_feats is not None:
             tda_out = self.tda_proj(tda_feats)
@@ -65,4 +67,4 @@ class DPR_Arch(nn.Module):
 
         x = torch.cat([dpr_out, fusion], dim=1)
         logits = self.fc(x)
-        return logits  # raw logits
+        return logits
