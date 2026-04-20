@@ -38,10 +38,16 @@ class USE_Model(nn.Module):
 
         # ----- Final classifier (same for both USE-only and USE+TDA) -----
         self.fc = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+
             nn.Linear(256, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Dropout(0.5),  # second dropout
+            nn.Dropout(0.5),
+
             nn.Linear(128, num_classes),
         )
 

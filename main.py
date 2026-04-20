@@ -25,7 +25,12 @@ torch.manual_seed(42)
 # ====================================================
 def _get_loss_fn(multilabel, labels_all, device=None):
     if multilabel:
-        return nn.BCEWithLogitsLoss()
+        labels_tensor = torch.tensor(labels_all, dtype=torch.float32)
+        pos_counts = labels_tensor.sum(dim=0)
+        neg_counts = labels_tensor.size(0) - pos_counts
+        pos_counts = torch.clamp(pos_counts, min=1.0)
+        pos_weight = (neg_counts / pos_counts).to(device)
+        return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:
         classes = np.unique(labels_all)
         class_wts = compute_class_weight(class_weight="balanced", classes=classes, y=labels_all)
@@ -90,7 +95,10 @@ def evaluate(model, data_loader, loss_fn, device, multilabel, tda):
         if multilabel:
             # --- Keep probabilities for metrics that need them (like AUC) ---
             probs = torch.sigmoid(outputs)
-            preds = (probs > 0.5).float()  # binary predictions for F1, precision, recall
+            k = min(3, probs.size(1))
+            preds = torch.zeros_like(probs)
+            topk_indices = torch.topk(probs, k, dim=1).indices
+            preds.scatter_(1, topk_indices, 1.0)
             all_probs.append(probs.detach().cpu())
             all_preds.append(preds.detach().cpu())
         else:
@@ -165,14 +173,11 @@ def train_loop(model, train_loader, val_loader, test_loader, cfg, device, train_
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
     # build loss function
-    if multilabel:
-        loss_fn = nn.BCEWithLogitsLoss()
-    else:
-        try:
-            labels_all = train_loader.dataset.tensors[-1].cpu().numpy()
-        except Exception:
-            labels_all = np.concatenate([b[-1].cpu().numpy() for b in train_loader], axis=0)
-        loss_fn = _get_loss_fn(multilabel, labels_all, device=device)
+    try:
+        labels_all = train_loader.dataset.tensors[-1].cpu().numpy()
+    except Exception:
+        labels_all = np.concatenate([b[-1].cpu().numpy() for b in train_loader], axis=0)
+    loss_fn = _get_loss_fn(multilabel, labels_all, device=device)
 
     # Early stopping configuration
     use_early = getattr(cfg, "EARLY_STOPPING", False)

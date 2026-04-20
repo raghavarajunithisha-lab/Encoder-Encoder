@@ -22,6 +22,10 @@ LEARNING_RATE = 1e-3
 
 VALIDATION_SPLIT = 0.1
 
+# Early Stopping
+EARLY_STOPPING = True        # toggle on/off
+PATIENCE = 3                 # stop if no improvement for 3 epochs
+DELTA = 0.0
 # Feature toggles
 TDA = True       # whether to compute additional TDA features
 MULTILABEL = False  # False because label is single-class here

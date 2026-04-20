@@ -106,8 +106,12 @@ def train_epoch(model, train_loader, optimizer, loss_fn, device, multilabel=Fals
         all_preds = np.vstack(all_preds)
         all_labels = np.vstack(all_labels)
 
-        # Convert probabilities into binary predictions (threshold = 0.5)
-        bin_preds = (all_preds > 0.5).astype(int)
+        # Convert probabilities into binary predictions using Top-K (K=3)
+        k = min(3, all_preds.shape[1])
+        bin_preds = np.zeros_like(all_preds, dtype=int)
+        for i in range(all_preds.shape[0]):
+            top_k_idx = np.argsort(all_preds[i])[-k:]
+            bin_preds[i, top_k_idx] = 1
 
         # Compute key classification metrics
         f1_micro = f1_score(all_labels, bin_preds, average="micro")

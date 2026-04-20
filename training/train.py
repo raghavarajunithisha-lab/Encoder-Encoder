@@ -63,12 +63,22 @@ def train_epoch(model, dataloader, criterion, optimizer, device, multilabel=Fals
     if multilabel:
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
-        f1_micro = f1_score(all_labels, all_preds > 0.5, average="micro")
-        f1_macro = f1_score(all_labels, all_preds > 0.5, average="macro")
-        precision = precision_score(all_labels, all_preds > 0.5, average="micro", zero_division=0)
-        recall = recall_score(all_labels, all_preds > 0.5, average="micro", zero_division=0)
+        
+        k = min(3, all_preds.size(1))
+        bin_preds = torch.zeros_like(all_preds)
+        topk_indices = torch.topk(all_preds, k, dim=1).indices
+        bin_preds.scatter_(1, topk_indices, 1.0)
+        
+        labels_np = all_labels.numpy()
+        bin_preds_np = bin_preds.numpy()
+        all_preds_np = all_preds.numpy()
+
+        f1_micro = f1_score(labels_np, bin_preds_np, average="micro")
+        f1_macro = f1_score(labels_np, bin_preds_np, average="macro")
+        precision = precision_score(labels_np, bin_preds_np, average="micro", zero_division=0)
+        recall = recall_score(labels_np, bin_preds_np, average="micro", zero_division=0)
         try:
-            auc = roc_auc_score(all_labels, all_preds, average="micro")
+            auc = roc_auc_score(labels_np, all_preds_np, average="micro")
         except ValueError:
             auc = 0.0
         metrics = {
@@ -133,12 +143,22 @@ def validate_epoch(model, dataloader, criterion, device, multilabel=False):
     if multilabel:
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
-        f1_micro = f1_score(all_labels, all_preds > 0.5, average="micro")
-        f1_macro = f1_score(all_labels, all_preds > 0.5, average="macro")
-        precision = precision_score(all_labels, all_preds > 0.5, average="micro", zero_division=0)
-        recall = recall_score(all_labels, all_preds > 0.5, average="micro", zero_division=0)
+        
+        k = min(3, all_preds.size(1))
+        bin_preds = torch.zeros_like(all_preds)
+        topk_indices = torch.topk(all_preds, k, dim=1).indices
+        bin_preds.scatter_(1, topk_indices, 1.0)
+        
+        labels_np = all_labels.numpy()
+        bin_preds_np = bin_preds.numpy()
+        all_preds_np = all_preds.numpy()
+
+        f1_micro = f1_score(labels_np, bin_preds_np, average="micro")
+        f1_macro = f1_score(labels_np, bin_preds_np, average="macro")
+        precision = precision_score(labels_np, bin_preds_np, average="micro", zero_division=0)
+        recall = recall_score(labels_np, bin_preds_np, average="micro", zero_division=0)
         try:
-            auc = roc_auc_score(all_labels, all_preds, average="micro")
+            auc = roc_auc_score(labels_np, all_preds_np, average="micro")
         except ValueError:
             auc = 0.0
         metrics = {

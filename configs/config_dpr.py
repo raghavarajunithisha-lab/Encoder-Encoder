@@ -22,6 +22,10 @@ LEARNING_RATE = 1e-3
 
 VALIDATION_SPLIT = 0.1
 
+# Early Stopping
+EARLY_STOPPING = True
+PATIENCE = 3
+DELTA = 0.0
 # Feature toggles
 TDA = False
 MULTILABEL = False
